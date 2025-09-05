@@ -119,7 +119,12 @@ func (ic *IGDBClient) SearchGameWithImages(gameName string) (*IGDBGameInfo, erro
 	defer cancel()
 
 	// Search for the game with a higher limit to get multiple results
-	games, err := ic.client.Games.Search(gameName, igdb.SetFields("name,first_release_date,summary,storyline,slug,cover,screenshots,rating,genres,platforms,category,status"), igdb.SetLimit(10))
+	// IGDB search returns results in relevance order by default
+	games, err := ic.client.Games.Search(gameName,
+		igdb.SetFields("name,first_release_date,summary,storyline,slug,cover,screenshots,rating,genres,platforms,category,status"),
+		igdb.SetLimit(20), // Get more results to have better selection
+		igdb.SetFilter("first_release_date", igdb.OpGreaterThan, fmt.Sprintf("%d", time.Now().AddDate(-20, 0, 0).Unix())), // Only games from last 20 years
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search IGDB for game '%s': %w", gameName, err)
 	}
@@ -302,6 +307,19 @@ func calculateMatchScore(searchQuery string, game *igdb.Game) float64 {
 		// Apply recency bonus (0.0 to 0.2 bonus for recent games)
 		recencyBonus := calculateRecencyBonus(game.FirstReleaseDate)
 		baseScore += recencyBonus
+
+		// Bonus for main games (not DLC, updates, etc.)
+		if game.Category == 0 { // Main Game
+			baseScore += 0.1
+		}
+
+		// Penalty for very old games (pre-2010)
+		if game.FirstReleaseDate != 0 {
+			releaseYear := time.Unix(int64(game.FirstReleaseDate), 0).Year()
+			if releaseYear < 2010 {
+				baseScore *= 0.5 // Heavy penalty for very old games
+			}
+		}
 
 		// Apply penalties for game packs, collections, and similar titles
 		penaltyWords := []string{
