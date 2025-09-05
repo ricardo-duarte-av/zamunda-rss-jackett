@@ -119,7 +119,7 @@ func (ic *IGDBClient) SearchGameWithImages(gameName string) (*IGDBGameInfo, erro
 	defer cancel()
 
 	// Search for the game with a higher limit to get multiple results
-	games, err := ic.client.Games.Search(gameName, igdb.SetFields("name,first_release_date,summary,storyline,slug,cover,screenshots,rating,genres,platforms"), igdb.SetLimit(10))
+	games, err := ic.client.Games.Search(gameName, igdb.SetFields("name,first_release_date,summary,storyline,slug,cover,screenshots,rating,genres,platforms,category,status"), igdb.SetLimit(10))
 	if err != nil {
 		return nil, fmt.Errorf("failed to search IGDB for game '%s': %w", gameName, err)
 	}
@@ -169,8 +169,77 @@ func findBestMatch(searchQuery string, games []*igdb.Game) *igdb.Game {
 
 	searchLower := strings.ToLower(strings.TrimSpace(searchQuery))
 
-	for _, game := range games {
+	log.Printf("=== FINDING BEST MATCH FOR '%s' ===", searchQuery)
+	log.Printf("Found %d games to evaluate:", len(games))
+
+	for i, game := range games {
 		score := calculateMatchScore(searchLower, game)
+		recencyBonus := calculateRecencyBonus(game.FirstReleaseDate)
+		releaseDate := "Unknown"
+		if game.FirstReleaseDate != 0 {
+			releaseDate = time.Unix(int64(game.FirstReleaseDate), 0).Format("2006-01-02")
+		}
+
+		// Get game category info
+		category := "Unknown"
+		switch game.Category {
+		case 0:
+			category = "Main Game"
+		case 1:
+			category = "DLC/Add-on"
+		case 2:
+			category = "Expansion"
+		case 3:
+			category = "Bundle"
+		case 4:
+			category = "Standalone Expansion"
+		case 5:
+			category = "Mod"
+		case 6:
+			category = "Episode"
+		case 7:
+			category = "Season"
+		case 8:
+			category = "Remake"
+		case 9:
+			category = "Remaster"
+		case 10:
+			category = "Expanded Game"
+		case 11:
+			category = "Port"
+		case 12:
+			category = "Fork"
+		case 13:
+			category = "Pack"
+		case 14:
+			category = "Update"
+		}
+
+		// Get game status
+		status := "Unknown"
+		switch game.Status {
+		case 0:
+			status = "Released"
+		case 2:
+			status = "Alpha"
+		case 3:
+			status = "Beta"
+		case 4:
+			status = "Early Access"
+		case 5:
+			status = "Offline"
+		case 6:
+			status = "Cancelled"
+		case 7:
+			status = "Rumored"
+		case 8:
+			status = "Delisted"
+		}
+
+		log.Printf("  %d. '%s'", i+1, game.Name)
+		log.Printf("      Score: %.3f (base: %.3f + recency: %.3f)", score, score-recencyBonus, recencyBonus)
+		log.Printf("      Released: %s | Category: %s | Status: %s", releaseDate, category, status)
+		log.Printf("      ID: %d | Rating: %.1f | Summary: %.100s...", game.ID, game.Rating, game.Summary)
 
 		if bestGame == nil || score > bestScore {
 			bestGame = game
@@ -180,7 +249,7 @@ func findBestMatch(searchQuery string, games []*igdb.Game) *igdb.Game {
 
 	// Calculate recency bonus for logging
 	recencyBonus := calculateRecencyBonus(bestGame.FirstReleaseDate)
-	log.Printf("Best match for '%s': '%s' (score: %.2f, recency bonus: %.2f)", searchQuery, bestGame.Name, bestScore, recencyBonus)
+	log.Printf("=== SELECTED: '%s' (final score: %.3f, recency bonus: %.3f) ===", bestGame.Name, bestScore, recencyBonus)
 	return bestGame
 }
 
