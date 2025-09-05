@@ -178,75 +178,130 @@ func findBestMatch(searchQuery string, games []*igdb.Game) *igdb.Game {
 		}
 	}
 
-	log.Printf("Best match for '%s': '%s' (score: %.2f)", searchQuery, bestGame.Name, bestScore)
+	// Calculate recency bonus for logging
+	recencyBonus := calculateRecencyBonus(bestGame.FirstReleaseDate)
+	log.Printf("Best match for '%s': '%s' (score: %.2f, recency bonus: %.2f)", searchQuery, bestGame.Name, bestScore, recencyBonus)
 	return bestGame
 }
 
 // calculateMatchScore returns a score between 0 and 1, where 1 is a perfect match
 func calculateMatchScore(searchQuery string, game *igdb.Game) float64 {
 	gameName := strings.ToLower(strings.TrimSpace(game.Name))
+	baseScore := 0.0
 
 	// Perfect exact match
 	if gameName == searchQuery {
-		return 1.0
-	}
-
-	// Exact word match (e.g., "subnautica" matches "Subnautica")
-	if gameName == searchQuery {
-		return 0.95
-	}
-
-	// Check if search query is contained in game name
-	if strings.Contains(gameName, searchQuery) {
-		// Bonus for being at the start of the name
+		baseScore = 1.0
+	} else if gameName == searchQuery {
+		// Exact word match (e.g., "subnautica" matches "Subnautica")
+		baseScore = 0.95
+	} else if strings.Contains(gameName, searchQuery) {
+		// Check if search query is contained in game name
 		if strings.HasPrefix(gameName, searchQuery) {
-			return 0.9
+			baseScore = 0.9
+		} else {
+			baseScore = 0.8
 		}
-		return 0.8
-	}
+	} else if strings.Contains(searchQuery, gameName) {
+		// Check if game name is contained in search query
+		baseScore = 0.7
+	} else {
+		// Check for word-by-word matching
+		searchWords := strings.Fields(searchQuery)
+		gameWords := strings.Fields(gameName)
 
-	// Check if game name is contained in search query
-	if strings.Contains(searchQuery, gameName) {
-		return 0.7
-	}
+		wordMatches := 0
+		for _, searchWord := range searchWords {
+			for _, gameWord := range gameWords {
+				if searchWord == gameWord {
+					wordMatches++
+					break
+				}
+			}
+		}
 
-	// Check for word-by-word matching
-	searchWords := strings.Fields(searchQuery)
-	gameWords := strings.Fields(gameName)
-
-	wordMatches := 0
-	for _, searchWord := range searchWords {
-		for _, gameWord := range gameWords {
-			if searchWord == gameWord {
-				wordMatches++
-				break
+		if len(searchWords) > 0 {
+			wordScore := float64(wordMatches) / float64(len(searchWords))
+			if wordScore > 0.5 {
+				baseScore = wordScore * 0.6 // Cap at 0.6 for partial word matches
 			}
 		}
 	}
 
-	if len(searchWords) > 0 {
-		wordScore := float64(wordMatches) / float64(len(searchWords))
-		if wordScore > 0.5 {
-			return wordScore * 0.6 // Cap at 0.6 for partial word matches
+	// If we have a base score, apply recency bonus and penalties
+	if baseScore > 0 {
+		// Apply recency bonus (0.0 to 0.2 bonus for recent games)
+		recencyBonus := calculateRecencyBonus(game.FirstReleaseDate)
+		baseScore += recencyBonus
+
+		// Apply penalties for game packs, collections, and similar titles
+		penaltyWords := []string{
+			"pack", "collection", "bundle", "double", "triple", "quadruple",
+			"complete", "ultimate", "deluxe", "edition", "remastered",
+			"remaster", "definitive", "anniversary", "gold", "platinum",
+			"+", "plus", "and", "&", "with", "featuring", "including",
+		}
+
+		for _, penaltyWord := range penaltyWords {
+			if strings.Contains(gameName, penaltyWord) {
+				baseScore *= 0.3 // Heavy penalty for pack/collection titles
+				break
+			}
+		}
+
+		// Cap the final score at 1.0
+		if baseScore > 1.0 {
+			baseScore = 1.0
 		}
 	}
 
-	// Penalize game packs, collections, and similar titles
-	penaltyWords := []string{
-		"pack", "collection", "bundle", "double", "triple", "quadruple",
-		"complete", "ultimate", "deluxe", "edition", "remastered",
-		"remaster", "definitive", "anniversary", "gold", "platinum",
-		"+", "plus", "and", "&", "with", "featuring", "including",
+	return baseScore
+}
+
+// calculateRecencyBonus returns a bonus score (0.0 to 0.2) based on how recent the game is
+func calculateRecencyBonus(releaseDate int) float64 {
+	if releaseDate == 0 {
+		return 0.0 // No release date, no bonus
 	}
 
-	for _, penaltyWord := range penaltyWords {
-		if strings.Contains(gameName, penaltyWord) {
-			return 0.1 // Heavy penalty for pack/collection titles
+	// Convert Unix timestamp to time
+	releaseTime := time.Unix(int64(releaseDate), 0)
+	now := time.Now()
+
+	// Calculate years difference (positive for past, negative for future)
+	yearsDifference := releaseTime.Sub(now).Hours() / (24 * 365.25)
+
+	// Handle future release dates (upcoming games)
+	if yearsDifference > 0 {
+		// Future games get maximum bonus if releasing within 1 year
+		if yearsDifference <= 1 {
+			return 0.2 // Maximum bonus for games releasing soon
+		} else if yearsDifference <= 2 {
+			// Decreasing bonus for games releasing in 1-2 years
+			return 0.2 - (yearsDifference-1)*0.1
+		} else {
+			// Very distant future games get minimal bonus
+			return 0.05
 		}
 	}
 
-	// Very low score for no match
-	return 0.0
+	// Handle past release dates (released games)
+	yearsSinceRelease := -yearsDifference // Convert to positive number
+
+	// Give maximum bonus (0.2) for games released in the last 2 years
+	// Gradually decrease bonus for older games
+	if yearsSinceRelease <= 2 {
+		return 0.2
+	} else if yearsSinceRelease <= 5 {
+		// Linear decrease from 0.2 to 0.1 over 3 years
+		return 0.2 - (yearsSinceRelease-2)*0.033
+	} else if yearsSinceRelease <= 10 {
+		// Linear decrease from 0.1 to 0.05 over 5 years
+		return 0.1 - (yearsSinceRelease-5)*0.01
+	} else {
+		// Very old games get minimal bonus
+		return 0.05
+	}
 }
 
 // getGenres retrieves genre information for given genre IDs
