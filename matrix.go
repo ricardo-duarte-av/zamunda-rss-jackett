@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
 	"maunium.net/go/mautrix"
@@ -15,15 +16,61 @@ type MatrixClient struct {
 }
 
 // NewMatrixClient creates a new Matrix client
-func NewMatrixClient(homeserver, userID, accessToken, roomID string) (*MatrixClient, error) {
-	client, err := mautrix.NewClient(homeserver, id.UserID(userID), accessToken)
-	if err != nil {
-		return nil, err
+func NewMatrixClient(cfg *Config, configPath string) (*MatrixClient, error) {
+	var client *mautrix.Client
+	var err error
+
+	// First, try to use existing access token if available
+	if cfg.MatrixAccessToken != "" {
+		client, err = mautrix.NewClient(cfg.MatrixHomeserver, id.UserID(cfg.MatrixUserID), cfg.MatrixAccessToken)
+		if err != nil {
+			return nil, err
+		}
+
+		// Test if the token is still valid by making a simple API call
+		_, err = client.Whoami()
+		if err != nil {
+			log.Printf("Access token is invalid, attempting to refresh: %v", err)
+			// Token is invalid, we'll need to refresh it
+			client = nil
+		} else {
+			// Token is valid, return the client
+			return &MatrixClient{
+				client: client,
+				roomID: id.RoomID(cfg.MatrixRoomID),
+			}, nil
+		}
+	}
+
+	// If we reach here, either no token was provided or the existing token is invalid
+	// Try to get a new token using username/password
+	if cfg.MatrixUser != "" && cfg.MatrixPassword != "" {
+		client, err = mautrix.NewClient(cfg.MatrixHomeserver, id.UserID(cfg.MatrixUserID), "")
+		if err != nil {
+			return nil, err
+		}
+		resp, err := client.Login(&mautrix.ReqLogin{
+			Type:       "m.login.password",
+			Identifier: mautrix.UserIdentifier{User: cfg.MatrixUser},
+			Password:   cfg.MatrixPassword,
+		})
+		if err != nil {
+			return nil, err
+		}
+		cfg.MatrixAccessToken = resp.AccessToken
+		saveErr := saveConfig(configPath, cfg)
+		if saveErr != nil {
+			log.Printf("Warning: failed to save new access token to config: %v", saveErr)
+		} else {
+			log.Printf("Successfully refreshed Matrix access token and saved to config")
+		}
+	} else {
+		return nil, fmt.Errorf("no Matrix access token or user/pass provided")
 	}
 
 	return &MatrixClient{
 		client: client,
-		roomID: id.RoomID(roomID),
+		roomID: id.RoomID(cfg.MatrixRoomID),
 	}, nil
 }
 

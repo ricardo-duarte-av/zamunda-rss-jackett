@@ -18,6 +18,8 @@ type Config struct {
 	RSSURL            string
 	MatrixHomeserver  string
 	MatrixUserID      string
+	MatrixUser        string
+	MatrixPassword    string
 	MatrixAccessToken string
 	MatrixRoomID      string
 	IGDBClientID      string
@@ -37,12 +39,7 @@ func NewRSSProcessor(config *Config) (*RSSProcessor, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	// Initialize Matrix client
-	matrixClient, err := NewMatrixClient(
-		config.MatrixHomeserver,
-		config.MatrixUserID,
-		config.MatrixAccessToken,
-		config.MatrixRoomID,
-	)
+	matrixClient, err := NewMatrixClient(config, ".env")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Matrix client: %v", err)
 	}
@@ -149,6 +146,8 @@ func loadConfig() (*Config, error) {
 		RSSURL:            getEnv("RSS_URL", ""),
 		MatrixHomeserver:  getEnv("MATRIX_HOMESERVER", ""),
 		MatrixUserID:      getEnv("MATRIX_USER_ID", ""),
+		MatrixUser:        getEnv("MATRIX_USER", ""),
+		MatrixPassword:    getEnv("MATRIX_PASSWORD", ""),
 		MatrixAccessToken: getEnv("MATRIX_ACCESS_TOKEN", ""),
 		MatrixRoomID:      getEnv("MATRIX_ROOM_ID", ""),
 		IGDBClientID:      getEnv("IGDB_CLIENT_ID", ""),
@@ -165,9 +164,6 @@ func loadConfig() (*Config, error) {
 	if config.MatrixUserID == "" {
 		return nil, fmt.Errorf("MATRIX_USER_ID is required")
 	}
-	if config.MatrixAccessToken == "" {
-		return nil, fmt.Errorf("MATRIX_ACCESS_TOKEN is required")
-	}
 	if config.MatrixRoomID == "" {
 		return nil, fmt.Errorf("MATRIX_ROOM_ID is required")
 	}
@@ -176,6 +172,11 @@ func loadConfig() (*Config, error) {
 	}
 	if config.IGDBClientSecret == "" {
 		return nil, fmt.Errorf("IGDB_CLIENT_SECRET is required")
+	}
+
+	// Validate Matrix authentication - either access token or user/pass required
+	if config.MatrixAccessToken == "" && (config.MatrixUser == "" || config.MatrixPassword == "") {
+		return nil, fmt.Errorf("either MATRIX_ACCESS_TOKEN or both MATRIX_USER and MATRIX_PASSWORD are required")
 	}
 
 	return config, nil
@@ -187,6 +188,27 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// saveConfig saves the configuration to a .env file
+func saveConfig(configPath string, cfg *Config) error {
+	envContent := fmt.Sprintf(`# RSS Feed Configuration
+RSS_URL=%s
+
+# Matrix Configuration
+MATRIX_HOMESERVER=%s
+MATRIX_USER_ID=%s
+MATRIX_USER=%s
+MATRIX_PASSWORD=%s
+MATRIX_ACCESS_TOKEN=%s
+MATRIX_ROOM_ID=%s
+
+# IGDB API Configuration
+IGDB_CLIENT_ID=%s
+IGDB_CLIENT_SECRET=%s
+`, cfg.RSSURL, cfg.MatrixHomeserver, cfg.MatrixUserID, cfg.MatrixUser, cfg.MatrixPassword, cfg.MatrixAccessToken, cfg.MatrixRoomID, cfg.IGDBClientID, cfg.IGDBClientSecret)
+
+	return os.WriteFile(configPath, []byte(envContent), 0644)
 }
 
 func main() {
