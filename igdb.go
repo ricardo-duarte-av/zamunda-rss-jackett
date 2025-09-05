@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -119,10 +120,10 @@ func (ic *IGDBClient) SearchGameWithImages(gameName string) (*IGDBGameInfo, erro
 	defer cancel()
 
 	// Search for the game with a higher limit to get multiple results
-	// IGDB search returns results in relevance order by default
+	// Use Search method and then sort the results by date in our code
 	games, err := ic.client.Games.Search(gameName,
 		igdb.SetFields("name,first_release_date,summary,storyline,slug,cover,screenshots,rating,genres,platforms,category,status"),
-		igdb.SetLimit(20), // Get more results to have better selection
+		igdb.SetLimit(50), // Get more results to have better selection
 		igdb.SetFilter("first_release_date", igdb.OpGreaterThan, fmt.Sprintf("%d", time.Now().AddDate(-20, 0, 0).Unix())), // Only games from last 20 years
 	)
 	if err != nil {
@@ -131,6 +132,21 @@ func (ic *IGDBClient) SearchGameWithImages(gameName string) (*IGDBGameInfo, erro
 	if len(games) == 0 {
 		return nil, fmt.Errorf("no games found for '%s'", gameName)
 	}
+
+	// Sort games by release date (newest first) to prioritize recent games
+	sort.Slice(games, func(i, j int) bool {
+		// Handle games with no release date (put them at the end)
+		if games[i].FirstReleaseDate == 0 && games[j].FirstReleaseDate == 0 {
+			return false
+		}
+		if games[i].FirstReleaseDate == 0 {
+			return false
+		}
+		if games[j].FirstReleaseDate == 0 {
+			return true
+		}
+		return games[i].FirstReleaseDate > games[j].FirstReleaseDate
+	})
 
 	// Find the best matching game using our scoring system
 	bestGame := findBestMatch(gameName, games)
