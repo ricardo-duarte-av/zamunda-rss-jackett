@@ -1,22 +1,29 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/Henry-Sarabia/igdb/v2"
 )
 
-// IGDBClient handles IGDB API operations
-type IGDBClient struct {
-	clientID     string
-	clientSecret string
-	httpClient   *http.Client
-	accessToken  string
+// IGDBGameInfo holds the info we want from IGDB
+type IGDBGameInfo struct {
+	Title       string
+	Date        int64
+	Summary     string
+	Storyline   string
+	IGDBURL     string
+	CoverURL    string
+	Screenshots []string
 }
 
-// GameInfo represents game information from IGDB
+// GameInfo represents game information from IGDB (for compatibility)
 type GameInfo struct {
 	Name        string
 	Summary     string
@@ -26,183 +33,212 @@ type GameInfo struct {
 	Platforms   []string
 }
 
-// IGDBGame represents a game from IGDB API
-type IGDBGame struct {
-	ID               int     `json:"id"`
-	Name             string  `json:"name"`
-	Summary          string  `json:"summary"`
-	FirstReleaseDate int64   `json:"first_release_date"`
-	Rating           float64 `json:"rating"`
-	Genres           []int   `json:"genres"`
-	Platforms        []int   `json:"platforms"`
+// IGDBAuthTransport handles OAuth2 authentication for IGDB
+type IGDBAuthTransport struct {
+	Token     string
+	ClientID  string
+	Transport http.RoundTripper
 }
 
-// IGDBGenre represents a genre from IGDB API
-type IGDBGenre struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+func (t *IGDBAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Authorization", "Bearer "+t.Token)
+	req.Header.Set("Client-ID", t.ClientID)
+	return t.Transport.RoundTrip(req)
 }
 
-// IGDBPlatform represents a platform from IGDB API
-type IGDBPlatform struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-}
-
-// IGDBTokenResponse represents the OAuth token response from IGDB
-type IGDBTokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in"`
+// IGDBClient handles IGDB API operations
+type IGDBClient struct {
+	client *igdb.Client
 }
 
 // NewIGDBClient creates a new IGDB client
 func NewIGDBClient(clientID, clientSecret string) (*IGDBClient, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-
-	igdbClient := &IGDBClient{
-		clientID:     clientID,
-		clientSecret: clientSecret,
-		httpClient:   client,
-	}
-
-	// Get access token
-	token, err := igdbClient.getAccessToken()
+	token, err := getIGDBAccessToken(clientID, clientSecret)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get access token: %v", err)
+		return nil, err
 	}
 
-	igdbClient.accessToken = token
-	return igdbClient, nil
+	httpClient := &http.Client{
+		Transport: &IGDBAuthTransport{
+			Token:     token,
+			ClientID:  clientID,
+			Transport: http.DefaultTransport,
+		},
+	}
+
+	client := igdb.NewClient(clientID, "", httpClient)
+
+	return &IGDBClient{
+		client: client,
+	}, nil
 }
 
-// getAccessToken retrieves an access token from IGDB
-func (ic *IGDBClient) getAccessToken() (string, error) {
+// getIGDBAccessToken retrieves an access token from Twitch OAuth2
+func getIGDBAccessToken(clientID, clientSecret string) (string, error) {
 	url := "https://id.twitch.tv/oauth2/token"
-	data := fmt.Sprintf("client_id=%s&client_secret=%s&grant_type=client_credentials", ic.clientID, ic.clientSecret)
-
-	resp, err := ic.httpClient.Post(url, "application/x-www-form-urlencoded", strings.NewReader(data))
+	data := fmt.Sprintf("client_id=%s&client_secret=%s&grant_type=client_credentials", clientID, clientSecret)
+	resp, err := http.Post(url, "application/x-www-form-urlencoded", strings.NewReader(data))
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	var tokenResp IGDBTokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+	var res struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return "", err
 	}
-
-	return tokenResp.AccessToken, nil
+	return res.AccessToken, nil
 }
 
 // SearchGame searches for a game by name and returns game information
 func (ic *IGDBClient) SearchGame(gameName string) (*GameInfo, error) {
-	// Search for games
-	games, err := ic.searchGames(gameName)
+	// Add context with timeout for API calls
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Search for the game with a higher limit to get multiple results
+	games, err := ic.client.Games.Search(gameName, igdb.SetFields("name,first_release_date,summary,storyline,slug,cover,screenshots,rating,genres,platforms"), igdb.SetLimit(10))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to search IGDB for game '%s': %w", gameName, err)
 	}
-
 	if len(games) == 0 {
-		return nil, fmt.Errorf("no games found for: %s", gameName)
+		return nil, fmt.Errorf("no games found for '%s'", gameName)
 	}
 
-	game := games[0]
-
-	// Get additional details
-	gameInfo := &GameInfo{
-		Name:        game.Name,
-		Summary:     game.Summary,
-		Rating:      game.Rating,
-		ReleaseDate: formatReleaseDate(game.FirstReleaseDate),
-		Genres:      []string{},
-		Platforms:   []string{},
+	// Find the best matching game using our scoring system
+	bestGame := findBestMatch(gameName, games)
+	if bestGame == nil {
+		return nil, fmt.Errorf("no suitable match found for '%s' among %d results", gameName, len(games))
 	}
 
 	// Get genres if available
-	if len(game.Genres) > 0 {
-		genres, err := ic.getGenres(game.Genres)
+	var genreNames []string
+	if len(bestGame.Genres) > 0 {
+		genres, err := ic.getGenres(ctx, bestGame.Genres)
 		if err == nil {
-			gameInfo.Genres = genres
+			genreNames = genres
 		}
 	}
 
 	// Get platforms if available
-	if len(game.Platforms) > 0 {
-		platforms, err := ic.getPlatforms(game.Platforms)
+	var platformNames []string
+	if len(bestGame.Platforms) > 0 {
+		platforms, err := ic.getPlatforms(ctx, bestGame.Platforms)
 		if err == nil {
-			gameInfo.Platforms = platforms
+			platformNames = platforms
 		}
+	}
+
+	// Convert to GameInfo for compatibility
+	gameInfo := &GameInfo{
+		Name:        bestGame.Name,
+		Summary:     bestGame.Summary,
+		Rating:      bestGame.Rating,
+		ReleaseDate: formatReleaseDate(int64(bestGame.FirstReleaseDate)),
+		Genres:      genreNames,
+		Platforms:   platformNames,
 	}
 
 	return gameInfo, nil
 }
 
-// searchGames searches for games using IGDB API
-func (ic *IGDBClient) searchGames(gameName string) ([]IGDBGame, error) {
-	url := "https://api.igdb.com/v4/games"
-	query := fmt.Sprintf(`search "%s"; fields id,name,summary,first_release_date,rating,genres,platforms; limit 1;`, gameName)
-
-	req, err := http.NewRequest("POST", url, strings.NewReader(query))
-	if err != nil {
-		return nil, err
+// findBestMatch implements a scoring system to find the best matching game
+func findBestMatch(searchQuery string, games []*igdb.Game) *igdb.Game {
+	if len(games) == 0 {
+		return nil
 	}
 
-	req.Header.Set("Client-ID", ic.clientID)
-	req.Header.Set("Authorization", "Bearer "+ic.accessToken)
-	req.Header.Set("Content-Type", "text/plain")
+	var bestGame *igdb.Game
+	var bestScore float64
 
-	resp, err := ic.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+	searchLower := strings.ToLower(strings.TrimSpace(searchQuery))
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("IGDB API returned status %d", resp.StatusCode)
-	}
+	for _, game := range games {
+		score := calculateMatchScore(searchLower, game)
 
-	var games []IGDBGame
-	if err := json.NewDecoder(resp.Body).Decode(&games); err != nil {
-		return nil, err
+		if bestGame == nil || score > bestScore {
+			bestGame = game
+			bestScore = score
+		}
 	}
 
-	return games, nil
+	log.Printf("Best match for '%s': '%s' (score: %.2f)", searchQuery, bestGame.Name, bestScore)
+	return bestGame
+}
+
+// calculateMatchScore returns a score between 0 and 1, where 1 is a perfect match
+func calculateMatchScore(searchQuery string, game *igdb.Game) float64 {
+	gameName := strings.ToLower(strings.TrimSpace(game.Name))
+
+	// Perfect exact match
+	if gameName == searchQuery {
+		return 1.0
+	}
+
+	// Exact word match (e.g., "subnautica" matches "Subnautica")
+	if gameName == searchQuery {
+		return 0.95
+	}
+
+	// Check if search query is contained in game name
+	if strings.Contains(gameName, searchQuery) {
+		// Bonus for being at the start of the name
+		if strings.HasPrefix(gameName, searchQuery) {
+			return 0.9
+		}
+		return 0.8
+	}
+
+	// Check if game name is contained in search query
+	if strings.Contains(searchQuery, gameName) {
+		return 0.7
+	}
+
+	// Check for word-by-word matching
+	searchWords := strings.Fields(searchQuery)
+	gameWords := strings.Fields(gameName)
+
+	wordMatches := 0
+	for _, searchWord := range searchWords {
+		for _, gameWord := range gameWords {
+			if searchWord == gameWord {
+				wordMatches++
+				break
+			}
+		}
+	}
+
+	if len(searchWords) > 0 {
+		wordScore := float64(wordMatches) / float64(len(searchWords))
+		if wordScore > 0.5 {
+			return wordScore * 0.6 // Cap at 0.6 for partial word matches
+		}
+	}
+
+	// Penalize game packs, collections, and similar titles
+	penaltyWords := []string{
+		"pack", "collection", "bundle", "double", "triple", "quadruple",
+		"complete", "ultimate", "deluxe", "edition", "remastered",
+		"remaster", "definitive", "anniversary", "gold", "platinum",
+		"+", "plus", "and", "&", "with", "featuring", "including",
+	}
+
+	for _, penaltyWord := range penaltyWords {
+		if strings.Contains(gameName, penaltyWord) {
+			return 0.1 // Heavy penalty for pack/collection titles
+		}
+	}
+
+	// Very low score for no match
+	return 0.0
 }
 
 // getGenres retrieves genre information for given genre IDs
-func (ic *IGDBClient) getGenres(genreIDs []int) ([]string, error) {
-	url := "https://api.igdb.com/v4/genres"
-
-	// Convert int slice to string slice for the query
-	var idStrings []string
-	for _, id := range genreIDs {
-		idStrings = append(idStrings, fmt.Sprintf("%d", id))
-	}
-
-	query := fmt.Sprintf(`fields name; where id = (%s);`, strings.Join(idStrings, ","))
-
-	req, err := http.NewRequest("POST", url, strings.NewReader(query))
+func (ic *IGDBClient) getGenres(ctx context.Context, genreIDs []int) ([]string, error) {
+	genres, err := ic.client.Genres.List(genreIDs, igdb.SetFields("name"))
 	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Client-ID", ic.clientID)
-	req.Header.Set("Authorization", "Bearer "+ic.accessToken)
-	req.Header.Set("Content-Type", "text/plain")
-
-	resp, err := ic.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("IGDB API returned status %d", resp.StatusCode)
-	}
-
-	var genres []IGDBGenre
-	if err := json.NewDecoder(resp.Body).Decode(&genres); err != nil {
 		return nil, err
 	}
 
@@ -215,38 +251,9 @@ func (ic *IGDBClient) getGenres(genreIDs []int) ([]string, error) {
 }
 
 // getPlatforms retrieves platform information for given platform IDs
-func (ic *IGDBClient) getPlatforms(platformIDs []int) ([]string, error) {
-	url := "https://api.igdb.com/v4/platforms"
-
-	// Convert int slice to string slice for the query
-	var idStrings []string
-	for _, id := range platformIDs {
-		idStrings = append(idStrings, fmt.Sprintf("%d", id))
-	}
-
-	query := fmt.Sprintf(`fields name; where id = (%s);`, strings.Join(idStrings, ","))
-
-	req, err := http.NewRequest("POST", url, strings.NewReader(query))
+func (ic *IGDBClient) getPlatforms(ctx context.Context, platformIDs []int) ([]string, error) {
+	platforms, err := ic.client.Platforms.List(platformIDs, igdb.SetFields("name"))
 	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Client-ID", ic.clientID)
-	req.Header.Set("Authorization", "Bearer "+ic.accessToken)
-	req.Header.Set("Content-Type", "text/plain")
-
-	resp, err := ic.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("IGDB API returned status %d", resp.StatusCode)
-	}
-
-	var platforms []IGDBPlatform
-	if err := json.NewDecoder(resp.Body).Decode(&platforms); err != nil {
 		return nil, err
 	}
 
