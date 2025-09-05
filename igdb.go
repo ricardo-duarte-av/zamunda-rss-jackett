@@ -94,6 +94,26 @@ func getIGDBAccessToken(clientID, clientSecret string) (string, error) {
 
 // SearchGame searches for a game by name and returns game information
 func (ic *IGDBClient) SearchGame(gameName string) (*GameInfo, error) {
+	igdbInfo, err := ic.SearchGameWithImages(gameName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert to GameInfo for compatibility
+	gameInfo := &GameInfo{
+		Name:        igdbInfo.Title,
+		Summary:     igdbInfo.Summary,
+		Rating:      0, // We'll need to get this from the original game data
+		ReleaseDate: formatReleaseDate(igdbInfo.Date),
+		Genres:      []string{}, // We'll need to get this from the original game data
+		Platforms:   []string{}, // We'll need to get this from the original game data
+	}
+
+	return gameInfo, nil
+}
+
+// SearchGameWithImages searches for a game by name and returns full IGDB information including images
+func (ic *IGDBClient) SearchGameWithImages(gameName string) (*IGDBGameInfo, error) {
 	// Add context with timeout for API calls
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -113,35 +133,29 @@ func (ic *IGDBClient) SearchGame(gameName string) (*GameInfo, error) {
 		return nil, fmt.Errorf("no suitable match found for '%s' among %d results", gameName, len(games))
 	}
 
-	// Get genres if available
-	var genreNames []string
-	if len(bestGame.Genres) > 0 {
-		genres, err := ic.getGenres(ctx, bestGame.Genres)
-		if err == nil {
-			genreNames = genres
+	info := &IGDBGameInfo{
+		Title:     bestGame.Name,
+		Date:      int64(bestGame.FirstReleaseDate),
+		Summary:   bestGame.Summary,
+		Storyline: bestGame.Storyline,
+		IGDBURL:   fmt.Sprintf("https://www.igdb.com/games/%s", bestGame.Slug),
+	}
+
+	// Fetch cover if present
+	if bestGame.Cover != 0 {
+		if err := ic.fetchCover(ctx, bestGame.Cover, info); err != nil {
+			log.Printf("Failed to fetch cover for '%s': %v", bestGame.Name, err)
 		}
 	}
 
-	// Get platforms if available
-	var platformNames []string
-	if len(bestGame.Platforms) > 0 {
-		platforms, err := ic.getPlatforms(ctx, bestGame.Platforms)
-		if err == nil {
-			platformNames = platforms
+	// Fetch screenshots in parallel if present
+	if len(bestGame.Screenshots) > 0 {
+		if err := ic.fetchScreenshots(ctx, bestGame.Screenshots, info, bestGame.Name); err != nil {
+			log.Printf("Failed to fetch some screenshots for '%s': %v", bestGame.Name, err)
 		}
 	}
 
-	// Convert to GameInfo for compatibility
-	gameInfo := &GameInfo{
-		Name:        bestGame.Name,
-		Summary:     bestGame.Summary,
-		Rating:      bestGame.Rating,
-		ReleaseDate: formatReleaseDate(int64(bestGame.FirstReleaseDate)),
-		Genres:      genreNames,
-		Platforms:   platformNames,
-	}
-
-	return gameInfo, nil
+	return info, nil
 }
 
 // findBestMatch implements a scoring system to find the best matching game
@@ -295,4 +309,62 @@ func formatSummary(summary string, maxLen int) string {
 		return summary
 	}
 	return summary[:maxLen-3] + "..."
+}
+
+// fetchCover fetches the cover image for a game
+func (ic *IGDBClient) fetchCover(ctx context.Context, coverID int, info *IGDBGameInfo) error {
+	cover, err := ic.client.Covers.Get(coverID, igdb.SetFields("url,image_id,width,height"))
+	if err != nil {
+		return fmt.Errorf("failed to get cover: %w", err)
+	}
+	if cover == nil || cover.Image.ImageID == "" {
+		return fmt.Errorf("no valid cover image found")
+	}
+
+	info.CoverURL = fmt.Sprintf("https://images.igdb.com/igdb/image/upload/t_original/%s.webp", cover.Image.ImageID)
+	return nil
+}
+
+// fetchScreenshots fetches screenshots in parallel
+func (ic *IGDBClient) fetchScreenshots(ctx context.Context, screenshotIDs []int, info *IGDBGameInfo, gameName string) error {
+	// Create a channel to collect results
+	type screenshotResult struct {
+		url string
+		err error
+	}
+	resultChan := make(chan screenshotResult, len(screenshotIDs))
+
+	// Launch goroutines for each screenshot
+	for _, id := range screenshotIDs {
+		go func(screenshotID int) {
+			sc, err := ic.client.Screenshots.Get(screenshotID, igdb.SetFields("url,image_id,width,height"))
+			if err != nil {
+				resultChan <- screenshotResult{err: fmt.Errorf("failed to get screenshot %d: %w", screenshotID, err)}
+				return
+			}
+			if sc == nil || sc.Image.ImageID == "" {
+				resultChan <- screenshotResult{err: fmt.Errorf("no valid screenshot image for ID %d", screenshotID)}
+				return
+			}
+
+			url := fmt.Sprintf("https://images.igdb.com/igdb/image/upload/t_original/%s.webp", sc.Image.ImageID)
+			resultChan <- screenshotResult{url: url}
+		}(id)
+	}
+
+	// Collect results
+	for i := 0; i < len(screenshotIDs); i++ {
+		select {
+		case result := <-resultChan:
+			if result.err != nil {
+				log.Printf("Screenshot fetch error for '%s': %v", gameName, result.err)
+			} else {
+				info.Screenshots = append(info.Screenshots, result.url)
+			}
+		case <-ctx.Done():
+			return fmt.Errorf("timeout while fetching screenshots: %w", ctx.Err())
+		}
+	}
+
+	return nil
 }

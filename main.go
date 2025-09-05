@@ -102,32 +102,24 @@ func (rp *RSSProcessor) processRSSFeed() error {
 		gameName := rp.extractGameName(item.Title)
 		log.Printf("Extracted game name: %s", gameName)
 
-		// Search IGDB for game information
-		gameInfo, err := rp.igdbClient.SearchGame(gameName)
+		// Search IGDB for game information with images
+		igdbInfo, err := rp.igdbClient.SearchGameWithImages(gameName)
 		if err != nil {
 			log.Printf("Failed to get IGDB info for %s: %v", gameName, err)
 			// Send basic notification even without IGDB info
-			message := fmt.Sprintf("🎮 New Game: %s\n🔗 %s", gameName, item.Link)
+			message := fmt.Sprintf("🎮 New Game: %s", gameName)
 			if err := rp.matrixClient.SendMessage(message); err != nil {
 				log.Printf("Failed to send Matrix message: %v", err)
 			}
 			continue
 		}
 
-		// Send detailed notification with game info
-		err = rp.matrixClient.SendGameNotification(
-			gameInfo.Name,
-			gameInfo.ReleaseDate,
-			fmt.Sprintf("%.1f", gameInfo.Rating),
-			formatGenres(gameInfo.Genres),
-			formatPlatforms(gameInfo.Platforms),
-			formatSummary(gameInfo.Summary, 200),
-			item.Link,
-		)
+		// Send detailed notification with game info and images
+		err = rp.matrixClient.SendGameNotificationWithImages(igdbInfo)
 		if err != nil {
 			log.Printf("Failed to send Matrix message: %v", err)
 		} else {
-			log.Printf("Sent Matrix message for: %s", gameInfo.Name)
+			log.Printf("Sent Matrix message for: %s", igdbInfo.Title)
 		}
 
 		// Add delay to avoid rate limiting
