@@ -190,8 +190,8 @@ func findBestMatch(searchQuery string, games []*igdb.Game) *igdb.Game {
 
 	searchLower := strings.ToLower(strings.TrimSpace(searchQuery))
 
-	log.Printf("=== FINDING BEST MATCH FOR '%s' ===", searchQuery)
-	log.Printf("Found %d games to evaluate:", len(games))
+	//log.Printf("=== FINDING BEST MATCH FOR '%s' ===", searchQuery)
+	//log.Printf("Found %d games to evaluate:", len(games))
 
 	for i, game := range games {
 		score := calculateMatchScore(searchLower, game)
@@ -257,10 +257,10 @@ func findBestMatch(searchQuery string, games []*igdb.Game) *igdb.Game {
 			status = "Delisted"
 		}
 
-		log.Printf("  %d. '%s'", i+1, game.Name)
-		log.Printf("      Score: %.3f (base: %.3f + recency: %.3f)", score, score-recencyBonus, recencyBonus)
-		log.Printf("      Released: %s | Category: %s | Status: %s", releaseDate, category, status)
-		log.Printf("      ID: %d | Rating: %.1f | Summary: %.100s...", game.ID, game.Rating, game.Summary)
+		//log.Printf("  %d. '%s'", i+1, game.Name)
+		//log.Printf("      Score: %.3f (base: %.3f + recency: %.3f)", score, score-recencyBonus, recencyBonus)
+		//log.Printf("      Released: %s | Category: %s | Status: %s", releaseDate, category, status)
+		//log.Printf("      ID: %d | Rating: %.1f | Summary: %.100s...", game.ID, game.Rating, game.Summary)
 
 		if bestGame == nil || score > bestScore {
 			bestGame = game
