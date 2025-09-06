@@ -193,7 +193,7 @@ func findBestMatch(searchQuery string, games []*igdb.Game) *igdb.Game {
 	//log.Printf("=== FINDING BEST MATCH FOR '%s' ===", searchQuery)
 	//log.Printf("Found %d games to evaluate:", len(games))
 
-	for game := range games {
+	for _, game := range games {
 		score := calculateMatchScore(searchLower, game)
 		//recencyBonus := calculateRecencyBonus(game.FirstReleaseDate)
 		//releaseDate := "Unknown"
