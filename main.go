@@ -219,6 +219,14 @@ func main() {
 		log.Fatalf("Failed to create RSS processor: %v", err)
 	}
 
+	// Initialize DB
+	db, err := initDB("processed_posts.db")
+	if err != nil {
+		log.Fatalf("Failed to initialize DB: %v", err)
+	}
+	log.Println("SQLite DB initialized.")
+	defer db.Close()
+
 	for {
 		// Process RSS feed
 		if err := processor.processRSSFeed(); err != nil {
