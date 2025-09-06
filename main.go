@@ -246,6 +246,6 @@ func main() {
 		}
 
 		log.Println("RSS processing completed successfully!")
-		time.Sleep(10 * time.Minute)
+		time.Sleep(1 * time.Minute)
 	}
 }
