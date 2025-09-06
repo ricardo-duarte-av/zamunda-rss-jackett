@@ -123,6 +123,7 @@ func (rp *RSSProcessor) processRSSFeed(db *sql.DB) error {
 			if err := rp.matrixClient.SendMessage(message); err != nil {
 				log.Printf("Failed to send Matrix message: %v", err)
 			}
+			markPostProcessed(db, guid)
 			continue
 		}
 
