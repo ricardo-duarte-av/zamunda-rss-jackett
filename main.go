@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -89,7 +90,7 @@ func (rp *RSSProcessor) extractGameName(title string) string {
 }
 
 // processRSSFeed processes the RSS feed and sends notifications
-func (rp *RSSProcessor) processRSSFeed() error {
+func (rp *RSSProcessor) processRSSFeed(db *sql.DB) error {
 	fp := gofeed.NewParser()
 	feed, err := fp.ParseURL(rp.config.RSSURL)
 	if err != nil {
@@ -240,7 +241,7 @@ func main() {
 
 	for {
 		// Process RSS feed
-		if err := processor.processRSSFeed(); err != nil {
+		if err := processor.processRSSFeed(db); err != nil {
 			log.Fatalf("Failed to process RSS feed: %v", err)
 		}
 
