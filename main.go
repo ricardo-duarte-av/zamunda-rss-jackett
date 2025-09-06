@@ -103,6 +103,16 @@ func (rp *RSSProcessor) processRSSFeed() error {
 		guid := item.GUID
 		log.Printf("Extracted game name: %s - guid: %s", gameName, guid)
 
+		processed, err := isPostProcessed(db, guid)
+		if err != nil {
+			log.Printf("DB error: %v", err)
+			continue
+		}
+		if processed {
+			log.Printf("Post already processed: %s", guid)
+			continue
+		}
+
 		// Search IGDB for game information with images
 		igdbInfo, err := rp.igdbClient.SearchGameWithImages(gameName)
 		if err != nil {
@@ -124,6 +134,7 @@ func (rp *RSSProcessor) processRSSFeed() error {
 		}
 
 		// Add delay to avoid rate limiting
+		markPostProcessed(db, guid)
 		time.Sleep(2 * time.Second)
 	}
 
