@@ -37,7 +37,7 @@ func downloadImage(url string) (image.Image, []byte, string, error) {
 	defer resp.Body.Close()
 
 	//log.Printf("HTTP Status: %s", resp.Status)
-	contentType := resp.Header.Get("Content-Type")
+	//contentType := resp.Header.Get("Content-Type")
 	//log.Printf("Content-Type: %s", contentType)
 
 	imgBytes, err := io.ReadAll(resp.Body)
