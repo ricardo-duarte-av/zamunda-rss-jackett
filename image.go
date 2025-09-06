@@ -36,9 +36,9 @@ func downloadImage(url string) (image.Image, []byte, string, error) {
 	}
 	defer resp.Body.Close()
 
-	log.Printf("HTTP Status: %s", resp.Status)
+	//log.Printf("HTTP Status: %s", resp.Status)
 	contentType := resp.Header.Get("Content-Type")
-	log.Printf("Content-Type: %s", contentType)
+	//log.Printf("Content-Type: %s", contentType)
 
 	imgBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -49,12 +49,12 @@ func downloadImage(url string) (image.Image, []byte, string, error) {
 		log.Printf("Image bytes too short: %d", len(imgBytes))
 	}
 	// Print first 16 bytes as hex for debugging
-	log.Printf("First 16 bytes: %x", imgBytes[:min(16, len(imgBytes))])
+	//log.Printf("First 16 bytes: %x", imgBytes[:min(16, len(imgBytes))])
 
 	// Try generic image.Decode
 	img, format, err := image.Decode(bytes.NewReader(imgBytes))
 	if err == nil {
-		log.Printf("Decoded using image.Decode, format: %s", format)
+		//log.Printf("Decoded using image.Decode, format: %s", format)
 		return img, imgBytes, format, nil
 	}
 	log.Printf("image.Decode failed: %v", err)
