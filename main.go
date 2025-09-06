@@ -100,7 +100,8 @@ func (rp *RSSProcessor) processRSSFeed() error {
 
 	for _, item := range feed.Items {
 		gameName := rp.extractGameName(item.Title)
-		log.Printf("Extracted game name: %s", gameName)
+		guid := item.Guid
+		log.Printf("Extracted game name: %s - guid: %s", gameName, guid)
 
 		// Search IGDB for game information with images
 		igdbInfo, err := rp.igdbClient.SearchGameWithImages(gameName)
