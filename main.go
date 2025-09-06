@@ -218,10 +218,13 @@ func main() {
 		log.Fatalf("Failed to create RSS processor: %v", err)
 	}
 
-	// Process RSS feed
-	if err := processor.processRSSFeed(); err != nil {
-		log.Fatalf("Failed to process RSS feed: %v", err)
-	}
+	for {
+		// Process RSS feed
+		if err := processor.processRSSFeed(); err != nil {
+			log.Fatalf("Failed to process RSS feed: %v", err)
+		}
 
-	log.Println("RSS processing completed successfully!")
+		log.Println("RSS processing completed successfully!")
+		time.Sleep(10 * time.Minute)
+	}
 }
